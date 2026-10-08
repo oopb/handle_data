@@ -75,6 +75,9 @@ def integer(x):
     if x is None or x == "":
         return None
     if isinstance(x, str):
+        numeric = num(x)
+        if numeric is not None:
+            return int(numeric) if numeric.is_integer() else None
         match = re.search(r"(\d+)(?:\.[a-zA-Z]+)?$", x.strip())
         if match:
             return int(match.group(1))
@@ -349,7 +352,7 @@ def hd_epic(root: Path) -> Iterator[dict]:
                             source_path=path, video_path=vid)
     # Optional official pickup/putdown object records. Do not conflate pickup
     # with first contact, and do not infer FPS from video filenames.
-    for path in sorted(root.rglob("*pickup*putdown*.json")):
+    for path in sorted(root.rglob("priming_info.json")):
         data = load_json(path)
         if not isinstance(data, dict):
             continue
@@ -491,11 +494,9 @@ def ego_exo4d(root: Path) -> Iterator[dict]:
             if not vid:
                 continue
             for i, step in enumerate(take.get("segments", [])):
+                aid = f"{step.get('step_unique_id', step.get('step_id', 'step'))}:{i}"
                 yield canonical(
-                    "ego_exo4d", vid, step.get("step_unique_id", step.get("step_id", i))
-                    + (":" + str(i)) if isinstance(step.get("step_unique_id", step.get("step_id", i)), str)
-                    else str(step.get("step_unique_id", step.get("step_id", i))) + ":" + str(i),
-                    "step_interval",
+                    "ego_exo4d", vid, aid, "step_interval",
                     start=step.get("start_time"), end=step.get("end_time"),
                     split=source_split(path), annotation_type="keystep",
                     action=step.get("step_description") or step.get("step_name"),
@@ -532,7 +533,15 @@ def assembly101(root: Path) -> Iterator[dict]:
                 source_path=path, video_path=vid)
     # Sequence-level coarse_labels: 3-column whitespace (start_frame end_frame label).
     # These may represent the same activities as fine-grained labels at a different level.
+    coarse_split_by_seq = {}
+    for split_file in root.rglob("coarse_splits/*.txt"):
+        label = source_split(split_file)
+        for line in split_file.read_text(encoding="utf-8").splitlines():
+            parts = line.split()
+            if parts and label != "unspecified":
+                coarse_split_by_seq[Path(parts[0]).stem] = label
     for path in sorted(root.rglob("coarse_labels/*.txt")):
+        split = coarse_split_by_seq.get(path.stem, "unspecified")
         for i, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
             parts = line.strip().split(maxsplit=2)
             if len(parts) != 3:
@@ -543,7 +552,7 @@ def assembly101(root: Path) -> Iterator[dict]:
             yield canonical(
                 "assembly101", path.stem, f"coarse:{i}", "step_interval",
                 start=a/30.0, end=b/30.0, fps=30.0,
-                annotation_type="coarse_grained", action=parts[2],
+                annotation_type="coarse_grained", action=parts[2], split=split,
                 attributes={"start_source_frame": a, "end_source_frame": b},
                 frame_basis="30fps extracted frames; sequence-level label",
                 source_path=path, video_path=None)
@@ -568,6 +577,7 @@ def feel(root: Path) -> Iterator[dict]:
             "right" if "right" in path.name.lower() else "unknown")
         video = "/".join(path.relative_to(root).parts[:-1])
         active = False
+        armed = False  # an observed non-contact state is required first
         prev_frame = None
         on_run = []
         off_count = 0
@@ -577,17 +587,20 @@ def feel(root: Path) -> Iterator[dict]:
             valid = (idx is not None and force is not None
                      and integer(row.get("force_row_idx")) != -1)
             if not valid or (prev_frame is not None and idx != prev_frame + 1):
-                active, on_run, off_count = False, [], 0
+                active, armed, on_run, off_count = False, False, [], 0
                 if not valid:
                     prev_frame = idx
                     continue
             prev_frame = idx
             if not active:
-                if force >= FEEL_ON_THRESHOLD:
+                if force <= FEEL_OFF_THRESHOLD:
+                    armed = True
+                    on_run.clear()
+                elif armed and force >= FEEL_ON_THRESHOLD:
                     on_run.append(idx)
                 else:
                     on_run.clear()
-                if len(on_run) >= FEEL_MIN_STABLE_FRAMES:
+                if armed and len(on_run) >= FEEL_MIN_STABLE_FRAMES:
                     # The first high-force frame is only a sensor-derived
                     # onset, NOT necessarily first visual contact.
                     f = on_run[0]
@@ -602,11 +615,11 @@ def feel(root: Path) -> Iterator[dict]:
                         evidence={"force_at_confirmation": force},
                         frame_basis="aligned FEEL RGB frame_idx",
                         source_path=path)
-                    active, on_run = True, []
+                    active, armed, on_run = True, False, []
             elif force <= FEEL_OFF_THRESHOLD:
                 off_count += 1
                 if off_count >= FEEL_MIN_STABLE_FRAMES:
-                    active, off_count = False, 0
+                    active, armed, off_count = False, True, 0
             else:
                 off_count = 0
 
@@ -646,7 +659,9 @@ def convert_one(name: str, root: Path, dest: Path):
                     counts["file_or_row_errors"] += 1
                     bf.write(json.dumps({"error": str(err), "dataset": name},
                                         ensure_ascii=False) + "\n")
-                    # Resume cannot be guaranteed after generator exceptions.
+                    # A Python generator closes when its body raises; avoid
+                    # silently claiming the remaining annotation file passed.
+                    print(f"[{name}] CONVERSION STOPPED by malformed row: {err}")
                     break
                 if e["event_id"] in seen:
                     counts["duplicates"] += 1
