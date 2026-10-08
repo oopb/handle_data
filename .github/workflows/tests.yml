@@ -1,4 +1,4 @@
-name: Python annotation converters
+name: Selected precise-event dataset processors
 on:
   push:
     branches: [main]
@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Compile converter and tests
-        run: python -m compileall -q convert_datasets.py tests
-      - name: Run all eight synthetic adapter fixtures
+      - name: Compile independent dataset modules and tests
+        run: python -m compileall -q ego4d.py hd_epic.py feel.py event_common.py tests
+      - name: Run source-grounded synthetic tests
         run: python -m unittest discover -s tests -v
