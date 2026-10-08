@@ -31,6 +31,14 @@ DATASET_DIRS = {
     "assembly101": DATA_ROOT / "Assembly101",
 }
 ENABLED = list(DATASET_DIRS)  # e.g. ["ego4d", "assembly101"]
+# Optional absolute-path templates for TRAINABLE video references. Use
+# {video_id} or {video_path} (original relative path). The annotations
+# alone do not guarantee any source videos have been downloaded.
+VIDEO_PATH_TEMPLATES = {
+    # "epic_kitchens": "/data/epic/videos/{video_id}.MP4",
+    # "assembly101": "/data/assembly101/videos/{video_path}",
+    # "ego4d": "/data/ego4d/v1/full_scale/{video_id}.mp4",
+}
 OVERWRITE = True
 SAVE_POSTHOC = True
 SAVE_PROSPECTIVE = True
@@ -187,6 +195,10 @@ def canonical(
         precision = "interval"
     aid = str(annotation_id)
     eid = dataset + "_" + stable_id(dataset, video_id, aid, event_type, split)
+    template = VIDEO_PATH_TEMPLATES.get(dataset)
+    resolved_video_path = (template.format(video_id=video_id,
+                                           video_path=video_path or video_id)
+                           if template else None)
     return {
         "schema_version": SCHEMA_VERSION,
         "event_id": eid,
@@ -196,7 +208,8 @@ def canonical(
             "source_annotation_type": annotation_type,
         },
         "media": {
-            "video_path": str(video_path) if video_path else None,
+            "video_path": resolved_video_path,
+            "original_video_ref": str(video_path) if video_path else str(video_id),
             "fps_nominal": fps, "frame_basis": frame_basis,
         },
         "semantics": {
