@@ -234,6 +234,19 @@ def canonical(
     }
 
 
+def safe_canonical(*args, **kwargs):
+    """Adapters report bad rows instead of abandoning a multi-million-row file."""
+    try:
+        return canonical(*args, **kwargs)
+    except (ValueError, TypeError, KeyError) as exc:
+        return {"_reject": {
+            "dataset": str(args[0]) if args else None,
+            "source_video_id": str(args[1]) if len(args) > 1 else None,
+            "source_annotation_id": str(args[2]) if len(args) > 2 else None,
+            "error": str(exc),
+        }}
+
+
 def instances(e: dict):
     t = e["target_event"]
     src = e["source"]
@@ -280,7 +293,7 @@ def instances(e: dict):
 def meccano(root: Path) -> Iterator[dict]:
     """Official RULSTM: 5 headerless CSV cols video, action, name_action, start, end."""
     files = [p for p in root.rglob("*.csv")
-             if p.stem.lower() in ("train", "validation", "val", "test")]
+             if re.search(r"(^|_)(train|training|validation|val|test)($|_)", p.stem.lower())]
     for path in sorted(files):
         for index, row in enumerate(read_csv(path, header=False)):
             if len(row) < 5:
@@ -292,7 +305,7 @@ def meccano(root: Path) -> Iterator[dict]:
             fps = MECCANO_ANNOTATION_FPS
             if fps is None or fps <= 0:
                 raise ValueError("Configure MECCANO_ANNOTATION_FPS for the extracted frames")
-            yield canonical("meccano", video, f"{path.name}:{index}", "action_interval",
+            yield safe_canonical("meccano", video, f"{path.name}:{index}", "action_interval",
                             start=a/fps, end=b/fps, fps=fps, split=source_split(path),
                             action=name_action, attributes={"action_class_id": action_id,
                             "start_source_frame": a, "end_source_frame": b},
@@ -328,7 +341,7 @@ def holoassist(root: Path) -> Iterator[dict]:
             start, end = seconds(a.get("start")), seconds(a.get("end"))
             if start is None or end is None:
                 continue
-            yield canonical("holoassist", vid, a.get("id", index),
+            yield safe_canonical("holoassist", vid, a.get("id", index),
                             "action_interval" if a["label"] == "Fine grained action"
                             else "step_interval", start=start, end=end,
                             annotation_type=a["label"], split=source_split(path),
@@ -352,7 +365,7 @@ def hd_epic(root: Path) -> Iterator[dict]:
             vid = str(row["video_id"])
             verbs = parse_list(row.get("verbs"))
             nouns = parse_list(row.get("nouns"))
-            yield canonical("hd_epic", vid,
+            yield safe_canonical("hd_epic", vid,
                             value(row, "unique_narration_id", default=idx),
                             "action_interval",
                             start=row["start_timestamp"], end=row["end_timestamp"],
@@ -380,7 +393,7 @@ def hd_epic(root: Path) -> Iterator[dict]:
                     record = obj.get(key)
                     if not isinstance(record, dict) or integer(record.get("frame")) is None:
                         continue
-                    yield canonical(
+                    yield safe_canonical(
                         "hd_epic", vid, f"{object_id}:{key}", event_type,
                         frame=record["frame"], fps=HD_EPIC_INTERACTION_FPS,
                         origin="source_exact", annotation_type="object_interaction",
@@ -399,7 +412,7 @@ def epic_kitchens(root: Path) -> Iterator[dict]:
             a, b = seconds(row.get("start_timestamp")), seconds(row.get("stop_timestamp"))
             if not vid or a is None or b is None:
                 continue
-            yield canonical(
+            yield safe_canonical(
                 "epic_kitchens", vid, row.get("narration_id") or index,
                 "action_interval", start=a, end=b, split=source_split(path),
                 action=row.get("narration"), verb=row.get("verb"), noun=row.get("noun"),
@@ -440,7 +453,7 @@ def ego4d(root: Path) -> Iterator[dict]:
                         start, end = action.get("start_sec"), action.get("end_sec")
                         details = {"state_transition": action.get("state_transition"),
                                    "clip_uid": clip.get("clip_uid")}
-                        yield canonical("ego4d", video_id, aid, "action_interval",
+                        yield safe_canonical("ego4d", video_id, aid, "action_interval",
                                         start=start, end=end, fps=fps,
                                         action=action.get("narration_text"),
                                         verb=action.get("structured_verb") or action.get("freeform_verb"),
@@ -454,7 +467,7 @@ def ego4d(root: Path) -> Iterator[dict]:
                                 frame, time = _ego_critical(raw, fps)
                                 if frame is None and time is None:
                                     continue
-                                yield canonical(
+                                yield safe_canonical(
                                     "ego4d", video_id, aid, kind,
                                     start=start, end=end, timestamp=time,
                                     frame=frame, fps=fps,
@@ -478,7 +491,7 @@ def ego4d(root: Path) -> Iterator[dict]:
                         if not isinstance(raw, dict) or integer(raw.get("frame")) is None:
                             continue
                         aid = f"{clip.get('clip_uid')}:{i}"
-                        yield canonical(
+                        yield safe_canonical(
                             "ego4d", vid, aid, kind,
                             start=ann.get("action_start_sec"), end=ann.get("action_end_sec"),
                             frame=raw["frame"], fps=None, split=source_split(path),
@@ -508,7 +521,7 @@ def ego_exo4d(root: Path) -> Iterator[dict]:
                 continue
             for i, step in enumerate(take.get("segments", [])):
                 aid = f"{step.get('step_unique_id', step.get('step_id', 'step'))}:{i}"
-                yield canonical(
+                yield safe_canonical(
                     "ego_exo4d", vid, aid, "step_interval",
                     start=step.get("start_time"), end=step.get("end_time"),
                     split=source_split(path), annotation_type="keystep",
@@ -532,7 +545,7 @@ def assembly101(root: Path) -> Iterator[dict]:
             a, b = integer(row.get("start_frame")), integer(row.get("end_frame"))
             if not vid or a is None or b is None:
                 continue
-            yield canonical(
+            yield safe_canonical(
                 "assembly101", vid, f"fine:{row.get('id', i)}", "action_interval",
                 start=a/30.0, end=b/30.0, fps=30.0, split=source_split(path),
                 annotation_type="fine_grained",
@@ -562,7 +575,7 @@ def assembly101(root: Path) -> Iterator[dict]:
             a, b = integer(parts[0]), integer(parts[1])
             if a is None or b is None:
                 continue
-            yield canonical(
+            yield safe_canonical(
                 "assembly101", path.stem, f"coarse:{i}", "step_interval",
                 start=a/30.0, end=b/30.0, fps=30.0,
                 annotation_type="coarse_grained", action=parts[2], split=split,
@@ -617,7 +630,7 @@ def feel(root: Path) -> Iterator[dict]:
                     # The first high-force frame is only a sensor-derived
                     # onset, NOT necessarily first visual contact.
                     f = on_run[0]
-                    yield canonical(
+                    yield safe_canonical(
                         "feel", video, f"{hand}:{f}", "force_contact_onset",
                         frame=f, fps=FEEL_FRAME_FPS, split="unspecified",
                         annotation_type="aligned_force",
@@ -676,6 +689,10 @@ def convert_one(name: str, root: Path, dest: Path):
                     # silently claiming the remaining annotation file passed.
                     print(f"[{name}] CONVERSION STOPPED by malformed row: {err}")
                     break
+                if "_reject" in e:
+                    counts["rejected"] += 1
+                    bf.write(json.dumps(e["_reject"], ensure_ascii=False) + "\n")
+                    continue
                 if e["event_id"] in seen:
                     counts["duplicates"] += 1
                     continue
