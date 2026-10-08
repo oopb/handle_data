@@ -1,123 +1,92 @@
-# handle_data — 流式视频事件标注转换（无需新增人工/模型标注）
+# handle_data：无需新增人工或模型标注的精确事件转换
 
-这是第一阶段 **annotation-only** 转换器：直接读取公开数据集提供的标注、关键帧或同步传感器数值，统一生成：
+本仓库针对流式视频**事件点定位**（接触、状态转变、实时触发）。上一版把全部 8 个数据集都当作可直接使用，是不符合这个目标的。现改为**每个入选数据集一个独立 Python 模块**，只依赖原有精确标签或同步物理信号。
 
-- **events.jsonl**：可追溯的事件真值（保留动作区间、源关键帧、时间精度、来源类型）。
-- **train_instances.jsonl**：由事件机械派生的后验定位（post_hoc）与有资格的流式触发（prospective）样本。
-- **rejected_samples.jsonl**：出错标注的记录；**stats.json**：每个数据集的转换统计。
+## 8 个候选中的取舍
 
-不会调用 LLM、VLM、视频识别模型，不会补猜“接触帧”，也不会把动作区间起始帧假装成视觉上的首次接触。
+| 数据集 | 本轮处理 | 依据 |
+| --- | --- | --- |
+| Ego4D | **是，核心** | FHO 官方 CONTACT / PNR 关键帧 |
+| HD-EPIC | **是，核心** | 官方拾取/放下帧，以及有效的 gaze priming 帧 |
+| FEEL | **是，可选** | 同步力信号自动推导接触上升沿；需正确的同步信息、标定阈值或现成接触状态列 |
+| MECCANO | 否 | 现有主要是动作区间，不是首次接触关键帧 |
+| HoloAssist | 否 | 细粒度行为起止区间不等于物理事件帧 |
+| EPIC-KITCHENS-100 | 否 | Action start/end 不能直接变成 first_contact |
+| Ego-Exo4D | 否 | Keystep 与 atomic timestamp 不构成精确物理触发时刻 |
+| Assembly101 | 否 | 大量 fine-action 区间边界不直接等价于接触帧 |
 
-## 如何使用
+这里的“免新增标注”是指**不需要在原数据上重新人工逐帧标注、也不调用 VLM/LLM**，并非声称 Ego4D/HD-EPIC 的官方原始标签从未经过人工标注。
 
-Python ≥ 3.10；默认仅用标准库。若处理 HD-EPIC 的官方 pickle 文件：
+## 文件结构
 
-    pip install pandas
+- **ego4d.py**：独立运行；读取官方 FHO hands 的 CONTACT/PNR，可从 fho_main 关联 narration/verb。没有 hands 文件时读取 fho_main 的原始关键帧（如果存在）。
+- **hd_epic.py**：独立运行；读取 eye_gaze_priming/priming_info.json 的 object pickup / putdown / gaze priming 帧，自动排除 -1/-2 的无效注视标签。
+- **feel.py**：独立运行；读取已同步 force CSV，以现有接触状态列或配置的双阈值滞回规则检测 force_contact_onset。
+- **event_common.py**：只负责事件 schema、稳定 ID、JSONL 输出和训练样本模板，**不含任何数据集解析器**。
+- **tests/test_selected.py**：独立单元测试。
+- **.github/workflows/tests.yml**：自动检查。
 
-1. 下载对应数据集的**官方标注**到本地；原始视频可稍后下载。
-2. 打开 **convert_datasets.py 顶部 CONFIG**，直接修改：
-   - DATA_ROOT：本地数据集根目录
-   - DATASET_DIRS：8 个数据集实际存放路径
-   - ENABLED：要转换的子集（例如 ["ego4d", "assembly101"]）
-   - OUTPUT_ROOT：结果输出目录
-   - VIDEO_PATH_TEMPLATES：视频真实路径规则（参见下方）
-   - 各数据集的 FPS、传感器阈值等特有参数
-3. 在 IDE 运行脚本，或在仓库根目录执行**不带任何参数**的命令：
+原来的 convert_datasets.py（八合一）和对应旧测试已删除。
 
-    python convert_datasets.py
+## 运行方式：不带命令行参数
 
-没有输入目录时会明确提示并跳过；这不等于该数据集已成功处理。输入输出均在代码中配置，不使用 argparse。
+直接在相应文件顶部 SETTINGS 部分修改数据路径和其他参数，然后运行：
 
-示例视频路径模板（必须与你下载的文件布局相匹配）：
+    python ego4d.py
 
-    VIDEO_PATH_TEMPLATES = {
-        "epic_kitchens": "/datadisk/EPIC/videos/{video_id}.MP4",
-        "assembly101": "/datadisk/Assembly101/videos/{video_path}",
-        "ego4d": "/datadisk/Ego4D/full_scale/{video_id}.mp4",
-    }
+或者：
 
-如果没设置相应的模板，media.video_path 为 null，media.original_video_ref 仍保留原始视频 ID/相对文件名；**不会虚构一个可用视频路径**。同理，脚本不会解码视频或猜测可变帧率（VFR）文件的 PTS。
+    python hd_epic.py
 
-## 各数据集实际处理内容
+或者：
 
-| 数据集 | 官方输入文件 / 格式 | 无新增标注的输出 | 注意 |
-|---|---|---|---|
-| **MECCANO** | RULSTM 5 列、**无表头**的 train/validation/test CSV：video, action, name_action, start, end | 动作区间 | start/end 可是 000012.jpg 形式的抽帧编号；必须确认并设置 MECCANO_ANNOTATION_FPS（代码默认 12，来自常用 RULSTM 抽帧设置，不代表原始视频 FPS）。 |
-| **HoloAssist** | 原始 JSON 中的 Fine grained action / Coarse grained action、start/end、attributes | 细粒度动作区间、粗步骤区间及 Verb/Noun/Correctness | 不把 Fine action 的起点解释为首次接触。使用原始标注，不混入处理后模型输出。 |
-| **HD-EPIC** | HD_EPIC_Narrations.pkl；eye_gaze_priming/priming_info.json | 动作区间、官方拾取帧 pickup_frame / 放下帧 putdown_frame | pickle 仅在**可信的官方文件**上加载；帧级记录默认不换算秒，除非正确设置 HD_EPIC_INTERACTION_FPS。拾取帧不等同于 first_contact。 |
-| **FEEL** | Kitchen/Pxx/force_left_aligned.csv、force_right_aligned.csv，Lab/Pxx/force_*aligned*.csv | 配置传感器阈值后，使用确定性的滞回规则提取 force_contact_onset | 需要**核准实际对齐 FPS 和阈值**，不能使用通用阈值制造“真值”；缺失或损坏的力数据跳过。传感器接触不等于视觉接触。默认不生成此类流式正触发。 |
-| **EPIC-KITCHENS-100** | EPIC_100_train.csv、EPIC_100_validation.csv | 动作区间、动词/名词/叙述 | 无真值标注的测试集不会被当作训练标签；不以 start_timestamp 充当接触时刻。 |
-| **Ego4D** | 优先 fho_main.json；没有它时回退 fho_hands_*.json | FHO 动作区间、CONTACT → first_contact、PNR → state_change_pnr | 只对官方实际提供的 CONTACT/PNR 生成点事件。用官方 FPS 换算秒只是**名义时间**，评测高精度时间需核对 PTS。 |
-| **Ego-Exo4D** | keystep JSON 的 annotations[take_uid].segments | 步骤区间及 scenario/step_name | 原子动作描述的时间锚不是精确关键帧，因此本版只转换 keystep 真值区间。 |
-| **Assembly101** | fine-grained-annotations/train/validation/test.csv；coarse-annotations/coarse_labels/*.txt；coarse_splits | 细粒度动作区间、粗步骤区间 | **原视频可为 60fps，但标注帧号按 30fps 抽帧定义**，故起止秒数按 frame/30 计算。不同视角可能来自同一序列，训练/验证不可按单视角随机拆分。 |
+    python feel.py
 
-这些脚本提供的是**原始标注 → 统一格式的适配器**，没有下载数据集/视频，不保证适配全部社区二次打包格式；有字段不匹配时应对照官方版本处理。
+不要求 argparse，也不用同时下载另外两个数据集。要求 Python 3.10+，基础代码只用标准库。
 
-## 标签的精度和训练模式
+### Ego4D
 
-每条 events 记录中：
+在 ego4d.py 配置 ANNOTATION_ROOT、OUTPUT_DIR、VIDEO_ROOT。建议同时具有官方 fho_hands_train.json、fho_hands_val.json 和 fho_main.json。使用 hands 文件时可获得源 split，并尝试按照 video_uid + action_start_frame + action_end_frame 关联 main 里的 narration/verb。未能关联的语义字段留空，绝不猜测。
 
-    {
-      "source": {"dataset": "ego4d", "source_video_id": "..."},
-      "semantics": {"coarse_action": "...", "verb": "..."},
-      "target_event": {
-        "event_type": "first_contact",
-        "timestamp_sec": 1.0,
-        "frame_idx": 30,
-        "interval_start_sec": 0.5,
-        "interval_end_sec": 2.5,
-        "precision": "frame",
-        "time_note": "estimated_from_annotation_fps; verify video PTS"
-      },
-      "quality": {
-        "label_origin": "source_exact",
-        "requires_visual_refinement": false
-      }
-    }
+优先采用来源本身的时间戳；若只有 canonical frame 且有官方名义 FPS，frame/FPS 仅是**名义秒数**，严格的帧级对齐必须验证 PTS。未提供 split 的主文件标为 unspecified，不擅自拆分训练测试。
 
-示例中 time_note 明确表示 **1.0 秒是 frame/官方名义 FPS 的估计，不是逐帧校验后的 PTS**。
+### HD-EPIC
 
-质量层级：
-- source_exact：官方给出关键帧（例 Ego4D CONTACT/PNR，HD-EPIC pickup/putdown）。
-- source_interval：官方给出的完整动作/步骤区间，**不能当作精确触发点**。
-- sensor_derived：FEEL 力传感器经用户指定阈值自动推得的接触状态上升沿，仍需要独立验证。
+在 hd_epic.py 配置 ANNOTATION_ROOT、VIDEO_ROOT、FPS_BY_VIDEO / DEFAULT_FPS。官方 priming_info.json 的 start.frame 表示拾取帧，end.frame 表示放下帧；prime_stats.frame_primed 大于等于零才输出 gaze-priming 事件，-1/-2 不会生成正事件。
 
-post_hoc 可使用明确的点或区间监督。prospective **只从带可用时间坐标、且 label_origin=source_exact 的点事件生成**；可在代码中自行决定是否启用经验证的 sensor_derived 事件（GENERATE_SENSOR_PROSPECTIVE）。训练实例的 response_policy 指明目标发生前保持静默，但**本版不另外生成负样本的视频内容或随机捏造事件阶段**。
+**拾取不等于 first_contact**；注视预期也不等于拾取。没有经过验证的视频 FPS 时，只输出帧号，不擅自换算秒数（此时也不生成 prospective）。
 
-## 目录结构
+### FEEL
 
-    handle_data/
-    ├── convert_datasets.py
-    ├── tests/test_converters.py
-    ├── .github/workflows/tests.yml
-    └── README.md
+在 feel.py 配置 DATA_ROOT、OUTPUT_DIR 和同步数据字段名。当前模块针对 force_*aligned*.csv 的 frame_idx、force_row_idx、force 格式；如下载版本不同，需依据真实标注更改对应列名。
 
-    output/
-    ├── ego4d/
-    │   ├── events.jsonl
-    │   ├── train_instances.jsonl
-    │   ├── rejected_samples.jsonl
-    │   └── stats.json
-    └── ... 其他数据集同样结构
+可以提供已经存在的接触状态列 LABEL_COLUMN，或者提供传感器标定后的 CONTACT_ON_THRESHOLD、CONTACT_OFF_THRESHOLD。脚本要求先观测稳定非接触，再确认连续接触，才生成 force_contact_onset。模糊读数和缺失信号不会强行当正标签。
 
-各数据集**分开存储**：Assembly101 跨视角、EPIC-KITCHENS 与其他衍生数据、同一视频的复用都需要后续以原视频/场景为单位去重、划分，**不能简单拼接所有训练 JSONL 后随机切分**。原始标注源路径、原视频 ID 与 converter 版本保留用于检查和追溯。
+**FEEL 的标签是 sensor_derived，不是视觉 first_contact 真值。** 由于 FEEL 同步流原始帧号可能不等于下载的视频切片局部帧号，默认禁用 INCLUDE_PROSPECTIVE；必须核实每段视频的路径、起始偏移、FPS 后再用于流式视频监督。脚本不会伪造这些映射。
 
-## 运行检查
+## 输出格式
 
-CI 自动执行：
+每个模块写各自的 output/ego4d、output/hd_epic、output/feel 目录，内含：
 
-    python -m compileall -q convert_datasets.py tests
+- events.jsonl：包含 source、media、semantics、target_event、evidence、quality、provenance；
+- train_instances.jsonl：post_hoc，及在存在时间坐标并被明确启用时的 prospective；
+- rejected_samples.jsonl：无法转换的标注；
+- stats.json：事件数量、训练样本数量和标签类型。
+
+质量标签：source_exact（官方事件帧）、source_derived_gaze（HD-EPIC 已有的 gaze priming 推导）、sensor_derived（FEEL 物理信号规则）。不同标签类型不能简单合并为 first_contact。
+
+注意：本版不负责下载数据或视频；默认路径要改成本地真实路径，也不会对不存在的视频进行虚假验证。对于正式训练，需要对齐 MP4 PTS 和 session/video clip 的偏移，且不能随机跨同一源视频拆分训练/验证。
+
+## 测试
+
+    python -m compileall -q ego4d.py hd_epic.py feel.py event_common.py tests
     python -m unittest discover -s tests -v
 
-单元测试使用合成的 8 类官方结构近似样例（无需下载大视频），包含区间精度、不虚构 contact、FEEL 滞回、帧率换算与 JSONL 写入。**这不替代实际下载数据后对齐官方版本的端到端测试**。
+测试通过合成结构样例验证解析、精度标注、门槛/接触滞回与 JSONL 派生；它不等于已经验证完整的官方数据包。CI 自动运行同样检查。
 
 ## 官方结构参考
 
-- MECCANO: https://github.com/fpv-iplab/MECCANO
-- HoloAssist: https://holoassist.github.io/data_links/README.html
-- HD-EPIC: https://github.com/hd-epic/hd-epic-annotations
-- FEEL: https://huggingface.co/datasets/edessa/feel
-- EPIC-KITCHENS-100: https://github.com/epic-kitchens/epic-kitchens-100-annotations
 - Ego4D: https://ego4d-data.org/docs/data/annotations-schemas/
-- Ego-Exo4D: https://docs.ego-exo4d-data.org/annotations/keystep/
-- Assembly101: https://github.com/assembly-101/assembly101-annotations
+- Ego4D FHO: https://ego4d-data.org/docs/benchmarks/hands-and-objects/
+- HD-EPIC: https://github.com/hd-epic/hd-epic-annotations
+- FEEL: https://www.cs.umd.edu/~edessale/feel
