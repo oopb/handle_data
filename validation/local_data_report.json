@@ -1,0 +1,123 @@
+{
+  "date": "2026-10-10",
+  "dataset_root": "/home/cc/ccx/datadisk/datasets",
+  "validation_scope": "All converted labels and training records; headers of all referenced Ego4D clips, all HD-EPIC videos, and one manifest episode per FEEL trial. Bounded decoded-frame PTS checks recorded separately.",
+  "ego4d": {
+    "conversion_stats": {
+      "events": 172141,
+      "instances": 344029,
+      "type:first_contact": 59182,
+      "origin:source_exact": 172141,
+      "type:state_change_pnr": 112959,
+      "events_without_available_media": 70,
+      "mode:post_hoc": 172063,
+      "mode:prospective": 171966,
+      "duplicate_training_instances": 89,
+      "instances_with_ambiguous_query": 20
+    },
+    "event_splits": {
+      "train": 107970,
+      "val": 55639,
+      "unspecified": 8532
+    },
+    "cross_split_source_videos": 216,
+    "cross_split_detail": "output/ego4d/stats.json",
+    "referenced_available_videos": 2472,
+    "canonical_to_source_clip_frame_mismatches": 0,
+    "mismatch_examples": [],
+    "negative_local_target_frames": 0,
+    "video_header_issues": [],
+    "training_coordinate_checks": {
+      "post_hoc": 172063,
+      "prospective": 171966
+    },
+    "invalid_training_examples": [],
+    "decoded_frame_pts_checks": [
+      {
+        "case": "nonzero_offset",
+        "video_path": "/home/cc/ccx/datadisk/datasets/ego4d_fho/v2/clips/8ec40595-b96a-4b54-9046-a14f46e193af.mp4",
+        "event_id": "ego4d_bc2ee918c38da6ca707f",
+        "source_frame": 18604,
+        "source_start_frame": 17759,
+        "local_frame": 845,
+        "nominal_local_sec": 28.166666666666668,
+        "decoded_frame_pts_sec": 28.166667,
+        "absolute_error_sec": 3.3333333249174757e-07,
+        "decoded_prefix_frames": 875,
+        "read_interval_sec": 29.166666666666668
+      },
+      {
+        "case": "zero_offset",
+        "video_path": "/home/cc/ccx/datadisk/datasets/ego4d_fho/v2/clips/8d686451-cac9-4526-a022-b6eaf7d467b4.mp4",
+        "event_id": "ego4d_96043f90eb0b347899c3",
+        "source_frame": 130,
+        "source_start_frame": 0,
+        "local_frame": 130,
+        "nominal_local_sec": 4.333333333333333,
+        "decoded_frame_pts_sec": 4.333333,
+        "absolute_error_sec": 3.33333333379926e-07,
+        "decoded_prefix_frames": 160,
+        "read_interval_sec": 5.333333333333333
+      }
+    ],
+    "training_instance_splits": {
+      "train": 215879,
+      "val": 111230,
+      "unspecified": 16920
+    },
+    "local_input": {
+      "fho_main_bytes": 2071598501,
+      "downloaded_clip_mp4s": 3471,
+      "hands_files": [
+        "fho_hands_test_unannotated.json"
+      ],
+      "missing_annotated_clip_uid": "964575bd-afec-4815-af83-e93e60d46602"
+    }
+  },
+  "hd_epic": {
+    "videos": 156,
+    "mapping_csvs": 156,
+    "priming_annotation_files": 0,
+    "video_mapping_issues": [],
+    "event_conversion": "blocked_missing_official_annotations"
+  },
+  "feel": {
+    "auxiliary_stats": {
+      "force_observations": 101219,
+      "trials": 52,
+      "episodes": 3317,
+      "events": 0,
+      "instances": 0,
+      "usable_as_contact_truth": false
+    },
+    "physical_mp4_files": 3345,
+    "sampled_manifest_videos": 52,
+    "sample_video_issues": [],
+    "contact_truth": "disabled_per_user_instruction",
+    "hand_semantics": "left/right force column names are modules 1/2 of the instrumented right hand",
+    "timestamps": "timestamp is episode-relative; timestamp_ns preserves the absolute device clock",
+    "relative_clock_checks": {
+      "observations_checked": 101219,
+      "negative_or_nonmonotonic_clock_observations": 0,
+      "max_relative_time_vs_nominal_frame_sec": 0
+    }
+  },
+  "verification": {
+    "python_3_13": {
+      "tests": 41,
+      "passed": 41
+    },
+    "python_3_10": {
+      "tests": 41,
+      "passed": 40,
+      "skipped_optional_parquet_test": 1
+    },
+    "compilation": "passed",
+    "git_diff_check": "passed",
+    "reader_versions_used": {
+      "ijson": "3.5.1",
+      "pyarrow": "26.0.0"
+    },
+    "dependency_location": "/tmp/handle-data-validation-deps; no existing Python environment modified"
+  }
+}

@@ -52,7 +52,9 @@ class Tests(unittest.TestCase):
                 }]
             }]
         })
-        events = list(ego4d.convert(self.root))
+        (self.root / "v1.mp4").touch()
+        with patch.object(ego4d, "VIDEO_ROOT", self.root):
+            events = list(ego4d.convert(self.root))
         self.assertEqual(len(events), 2)
         self.assertEqual([e["target_event"]["event_type"] for e in events],
                          ["first_contact", "state_change_pnr"])
@@ -132,7 +134,8 @@ class Tests(unittest.TestCase):
             w.writerow(["frame_idx", "contact_label"])
             for i, label in enumerate(["0", "0", "1", "1", "1", "0", "0"]):
                 w.writerow([i, label])
-        with patch.object(feel, "LABEL_COLUMN", "contact_label"):
+        with patch.object(feel, "LABEL_COLUMN", "contact_label"), \
+             patch.object(feel, "VALID_ROW_COLUMN", None):
             events = list(feel.convert(self.root))
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["target_event"]["frame_idx"], 2)

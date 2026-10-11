@@ -1,0 +1,2 @@
+ijson>=3.3,<4
+pyarrow>=12
